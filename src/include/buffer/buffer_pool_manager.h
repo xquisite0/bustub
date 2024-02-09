@@ -58,7 +58,7 @@ class BufferPoolManager {
    * @brief Create a new page in the buffer pool. Set page_id to the new page's id, or nullptr if all frames
    * are currently in use and not evictable (in another word, pinned).
    *
-   * You should pick the replacement frame from either the free list or the replacer (always find from the free list
+   * You should pick the replacement frame from either the free list or the replacer (alway s find from the free list
    * first), and then call the AllocatePage() method to get a new page id. If the replacement frame has a dirty page,
    * you should write it back to the disk first. You also need to reset the memory and metadata for the new page.
    *
@@ -180,7 +180,7 @@ class BufferPoolManager {
 
   /** Array of buffer pool pages. */
   Page *pages_;
-  /** Pointer to the disk sheduler. */
+  /** Pointer to the disk scheduler. */
   std::unique_ptr<DiskScheduler> disk_scheduler_ __attribute__((__unused__));
   /** Pointer to the log manager. Please ignore this for P1. */
   LogManager *log_manager_ __attribute__((__unused__));
