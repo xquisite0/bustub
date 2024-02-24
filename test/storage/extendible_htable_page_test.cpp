@@ -29,7 +29,7 @@
 namespace bustub {
 
 // NOLINTNEXTLINE
-TEST(ExtendibleHTableTest, DISABLED_BucketPageSampleTest) {
+TEST(ExtendibleHTableTest, BucketPageSampleTest) {
   auto disk_mgr = std::make_unique<DiskManagerUnlimitedMemory>();
   auto bpm = std::make_unique<BufferPoolManager>(5, disk_mgr.get());
 
@@ -59,6 +59,7 @@ TEST(ExtendibleHTableTest, DISABLED_BucketPageSampleTest) {
     // check for the inserted pairs
     for (unsigned i = 0; i < 10; i++) {
       index_key.SetFromInteger(i);
+      // std::cout << i << std::endl;
       ASSERT_TRUE(bucket_page->Lookup(index_key, rid, comparator));
       ASSERT_EQ(rid, RID(i, i));
     }
@@ -87,7 +88,7 @@ TEST(ExtendibleHTableTest, DISABLED_BucketPageSampleTest) {
 }
 
 // NOLINTNEXTLINE
-TEST(ExtendibleHTableTest, DISABLED_HeaderDirectoryPageSampleTest) {
+TEST(ExtendibleHTableTest, HeaderDirectoryPageSampleTest) {
   auto disk_mgr = std::make_unique<DiskManagerUnlimitedMemory>();
   auto bpm = std::make_unique<BufferPoolManager>(5, disk_mgr.get());
 

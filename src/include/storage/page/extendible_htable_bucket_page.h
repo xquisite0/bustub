@@ -134,6 +134,7 @@ class ExtendibleHTableBucketPage {
  private:
   uint32_t size_;
   uint32_t max_size_;
+  // bool initialized_ = false;
   MappingType array_[HTableBucketArraySize(sizeof(MappingType))];
 };
 

@@ -3,28 +3,130 @@
 
 namespace bustub {
 
-BasicPageGuard::BasicPageGuard(BasicPageGuard &&that) noexcept {}
+BasicPageGuard::BasicPageGuard(BasicPageGuard &&that) noexcept
+    : bpm_(that.bpm_), page_(that.page_), is_dirty_(that.is_dirty_) {
+  that.bpm_ = nullptr;
+  that.page_ = nullptr;
+  that.is_dirty_ = false;
+  // std::cout << "Basic Page " << page_->GetPageId() << " has been move constructed\n";
+}
 
-void BasicPageGuard::Drop() {}
+void BasicPageGuard::Drop() {
+  if (bpm_ == nullptr) {
+    return;
+  }
+  // std::cout << "Basic Page " << page_->GetPageId() << " was dropped\n";
+  bpm_->UnpinPage(page_->GetPageId(), is_dirty_);
+  bpm_ = nullptr;
+}
 
-auto BasicPageGuard::operator=(BasicPageGuard &&that) noexcept -> BasicPageGuard & { return *this; }
+auto BasicPageGuard::operator=(BasicPageGuard &&that) noexcept -> BasicPageGuard & {
+  if (bpm_ != nullptr) {
+    Drop();
+  }
+  bpm_ = that.bpm_;
+  page_ = that.page_;
+  is_dirty_ = that.is_dirty_;
 
-BasicPageGuard::~BasicPageGuard(){};  // NOLINT
+  that.bpm_ = nullptr;
+  that.page_ = nullptr;
+  that.is_dirty_ = false;
+  // std::cout << "Basic Page " << page_->GetPageId() << " has been move assigned\n";
 
-ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept = default;
+  return *this;
+}
 
-auto ReadPageGuard::operator=(ReadPageGuard &&that) noexcept -> ReadPageGuard & { return *this; }
+BasicPageGuard::~BasicPageGuard() {
+  if (bpm_ == nullptr) {
+    return;
+  }
+  // std::cout << "Basic Page " << page_->GetPageId() << " has gone out of scope\n";
+  bpm_->UnpinPage(page_->GetPageId(), is_dirty_);
+};  // NOLINT
 
-void ReadPageGuard::Drop() {}
+auto BasicPageGuard::UpgradeRead() -> ReadPageGuard {
+  BufferPoolManager *cur_bpm = bpm_;
+  Page *cur_page = page_;
 
-ReadPageGuard::~ReadPageGuard() {}  // NOLINT
+  // need to check for nullptr?
+  if (bpm_ != nullptr) {
+    cur_page->RLatch();
+  }
+  bpm_ = nullptr;
+  page_ = nullptr;
+  // std::cout << "Basic Page " << cur_page->GetPageId() << " has been upgraded to a read\n";
+  return {cur_bpm, cur_page};
+};
+auto BasicPageGuard::UpgradeWrite() -> WritePageGuard {
+  BufferPoolManager *cur_bpm = bpm_;
+  Page *cur_page = page_;
+  if (bpm_ != nullptr) {
+    cur_page->WLatch();
+  }
+  bpm_ = nullptr;
+  page_ = nullptr;
+  // std::cout << "Basic Page " << cur_page->GetPageId() << " has been upgraded to a write page\n";
+  return {cur_bpm, cur_page};
+};
 
-WritePageGuard::WritePageGuard(WritePageGuard &&that) noexcept = default;
+ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept {
+  guard_ = std::move(that.guard_);
+  // std::cout << "Read page " << guard_.PageId() << " has been move constructed\n";
+};
 
-auto WritePageGuard::operator=(WritePageGuard &&that) noexcept -> WritePageGuard & { return *this; }
+auto ReadPageGuard::operator=(ReadPageGuard &&that) noexcept -> ReadPageGuard & {
+  if (guard_.bpm_ != nullptr) {
+    guard_.page_->RUnlatch();
+  }
+  guard_ = std::move(that.guard_);
+  // std::cout << "Read page " << guard_.PageId() << " has been move assigned\n";
+  return *this;
+}
 
-void WritePageGuard::Drop() {}
+void ReadPageGuard::Drop() {
+  if (guard_.bpm_ == nullptr) {
+    return;
+  }
+  // std::cout << "Read page " << guard_.PageId() << " has been dropped\n";
+  // guard_.bpm_->UnpinPage(guard_.page_->GetPageId(), guard_.is_dirty_);
+  guard_.page_->RUnlatch();
+  guard_.Drop();
+}
 
-WritePageGuard::~WritePageGuard() {}  // NOLINT
+ReadPageGuard::~ReadPageGuard() {
+  if (guard_.bpm_ != nullptr) {
+    guard_.page_->RUnlatch();
+  }
+}
+
+WritePageGuard::WritePageGuard(WritePageGuard &&that) noexcept {
+  guard_ = std::move(that.guard_);
+  // std::cout << "Write page " << guard_.PageId() << " has been move constructed";
+};
+
+auto WritePageGuard::operator=(WritePageGuard &&that) noexcept -> WritePageGuard & {
+  if (guard_.bpm_ != nullptr) {
+    guard_.page_->WUnlatch();
+  }
+  guard_ = std::move(that.guard_);
+  // std::cout << "Write page " << guard_.PageId() << " has been move assigned\n";
+  return *this;
+}
+
+void WritePageGuard::Drop() {
+  if (guard_.bpm_ == nullptr) {
+    return;
+  }
+  // std::cout << "Write page " << guard_.PageId() << " has been dropped\n";
+  // guard_.bpm_->UnpinPage(guard_.page_->GetPageId(), true);
+  guard_.page_->WUnlatch();
+  guard_.Drop();
+}
+
+WritePageGuard::~WritePageGuard() {
+  if (guard_.bpm_ != nullptr) {
+    guard_.page_->WUnlatch();
+  }
+}
 
 }  // namespace bustub

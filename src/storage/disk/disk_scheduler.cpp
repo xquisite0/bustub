@@ -51,6 +51,7 @@ void DiskScheduler::StartWorkerThread() {
     } else {
       // request reads from disk
       // std::cout << "trying to read page\n";
+      // std::cout << cur_request->page_id_;
       disk_manager_->ReadPage(cur_request->page_id_, cur_request->data_);
       // std::cout << "successfully read page\n";
     }
