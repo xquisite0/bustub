@@ -36,13 +36,7 @@ auto BasicPageGuard::operator=(BasicPageGuard &&that) noexcept -> BasicPageGuard
   return *this;
 }
 
-BasicPageGuard::~BasicPageGuard() {
-  if (bpm_ == nullptr) {
-    return;
-  }
-  // std::cout << "Basic Page " << page_->GetPageId() << " has gone out of scope\n";
-  bpm_->UnpinPage(page_->GetPageId(), is_dirty_);
-};  // NOLINT
+BasicPageGuard::~BasicPageGuard(){};  // NOLINT
 
 auto BasicPageGuard::UpgradeRead() -> ReadPageGuard {
   BufferPoolManager *cur_bpm = bpm_;
@@ -93,11 +87,7 @@ void ReadPageGuard::Drop() {
   guard_.Drop();
 }
 
-ReadPageGuard::~ReadPageGuard() {
-  if (guard_.bpm_ != nullptr) {
-    guard_.page_->RUnlatch();
-  }
-}
+ReadPageGuard::~ReadPageGuard() {}  // NOLINT
 
 WritePageGuard::WritePageGuard(WritePageGuard &&that) noexcept {
   guard_ = std::move(that.guard_);

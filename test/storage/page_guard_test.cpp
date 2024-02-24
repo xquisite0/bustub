@@ -70,8 +70,6 @@ TEST(PageGuardTest, SampleTest) {
   {
     // std::cout << "THIS RAN4\n\n";
     auto *page2 = bpm->NewPage(&page_id_temp);
-    page2->RLatch();
-    // std::cout << "THIS RAN5\n\n";
     auto guard2 = ReadPageGuard(bpm.get(), page2);
     // std::cout << "THIS RAN6\n\n";
   }
