@@ -43,9 +43,9 @@ DiskExtendibleHashTable<K, V, KC>::DiskExtendibleHashTable(const std::string &na
       directory_max_depth_(directory_max_depth),
       bucket_max_size_(bucket_max_size) {
   // throw NotImplementedException("DiskExtendibleHashTable is not implemented");
-  std::cout << "Header Max Depth: " << header_max_depth << "\n";
-  std::cout << "Directory Max Depth: " << directory_max_depth << "\n";
-  std::cout << "Bucket Max Size: " << bucket_max_size << "\n";
+  // std::cout << "Header Max Depth: " << header_max_depth << "\n";
+  // std::cout << "Directory Max Depth: " << directory_max_depth << "\n";
+  // std::cout << "Bucket Max Size: " << bucket_max_size << "\n";
   BasicPageGuard header_guard = bpm_->NewPageGuarded(&header_page_id_);
   auto header = header_guard.AsMut<ExtendibleHTableHeaderPage>();
   header->Init(header_max_depth_);

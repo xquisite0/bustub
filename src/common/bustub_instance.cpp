@@ -365,6 +365,8 @@ auto BustubInstance::ExecuteSqlTxn(const std::string &sql, ResultWriter &writer,
     for (const auto &tuple : result_set) {
       writer.BeginRow();
       for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
+        std::cout << "Writing new cell\n";
+        std::cout << tuple.ToString(&schema) << "\n";
         writer.WriteCell(tuple.GetValue(&schema, i).ToString());
       }
       writer.EndRow();
