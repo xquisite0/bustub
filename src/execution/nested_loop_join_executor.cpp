@@ -97,7 +97,7 @@ void NestedLoopJoinExecutor::Init() {
       }
 
       Tuple combined_tuple = Tuple(values, &GetOutputSchema());
-      std::cout << combined_tuple.ToString(&GetOutputSchema()) << "\n";
+      // std::cout << combined_tuple.ToString(&GetOutputSchema()) << "\n";
       output_.emplace_back(combined_tuple);
     }
   }

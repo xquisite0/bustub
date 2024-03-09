@@ -15,8 +15,11 @@
 #include <memory>
 #include <vector>
 
+#include "binder/bound_order_by.h"
 #include "execution/executor_context.h"
 #include "execution/executors/abstract_executor.h"
+#include "execution/expressions/abstract_expression.h"
+#include "execution/plans/abstract_plan.h"
 #include "execution/plans/seq_scan_plan.h"
 #include "execution/plans/sort_plan.h"
 #include "storage/table/tuple.h"
@@ -52,5 +55,33 @@ class SortExecutor : public AbstractExecutor {
  private:
   /** The sort plan node to be executed */
   const SortPlanNode *plan_;
+  std::unique_ptr<AbstractExecutor> child_executor_;
+  const std::vector<std::pair<OrderByType, AbstractExpressionRef>> &order_bys_;
+
+  auto CustomComparator(const Tuple &a, const Tuple &b) -> bool {
+    for (auto &p : order_bys_) {
+      OrderByType type = p.first;
+      AbstractExpressionRef expr = p.second;
+      Value value_a = expr->Evaluate(&a, GetOutputSchema());
+      Value value_b = expr->Evaluate(&b, GetOutputSchema());
+
+      if (type == OrderByType::DEFAULT || type == OrderByType::ASC) {
+        if (value_a.CompareLessThan(value_b) == CmpBool::CmpTrue) {
+          return true;
+        }
+        if (value_a.CompareGreaterThan(value_b) == CmpBool::CmpTrue) {
+          return false;
+        }
+      } else {
+        if (value_a.CompareLessThan(value_b) == CmpBool::CmpTrue) {
+          return false;
+        }
+        if (value_a.CompareGreaterThan(value_b) == CmpBool::CmpTrue) {
+          return true;
+        }
+      }
+    }
+    return true;
+  }
 };
 }  // namespace bustub

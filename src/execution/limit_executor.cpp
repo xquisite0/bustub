@@ -23,3 +23,6 @@ void LimitExecutor::Init() { throw NotImplementedException("LimitExecutor is not
 auto LimitExecutor::Next(Tuple *tuple, RID *rid) -> bool { return false; }
 
 }  // namespace bustub
+
+// Todo:
+// Keep a global counter of number of tuples emitted.
