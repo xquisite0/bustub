@@ -13,14 +13,25 @@ void SortExecutor::Init() {
   Tuple tuple = Tuple{RID{INVALID_PAGE_ID, 0}};
   RID rid = RID{INVALID_PAGE_ID, 0};
 
-  std::vector<Tuple> tuples;
   while (child_executor_->Next(&tuple, &rid)) {
-    tuples.emplace_back(tuple);
+    tuples_.emplace_back(tuple);
   }
-  // sort(tuples.begin(), tuples.end(), CustomComparator);
+  SortTuples(tuples_);
+  initialized_ = true;
 }
 
-auto SortExecutor::Next(Tuple *tuple, RID *rid) -> bool { return false; }
+auto SortExecutor::Next(Tuple *tuple, RID *rid) -> bool {
+  if (!initialized_) {
+    Init();
+  }
+  if (iterator_ >= tuples_.size()) {
+    return false;
+  }
+  *tuple = tuples_[iterator_];
+  *rid = tuple->GetRid();
+  iterator_++;
+  return true;
+}
 
 }  // namespace bustub
 

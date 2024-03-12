@@ -27,6 +27,7 @@ namespace bustub {
 /**
  * The TopNExecutor executor executes a topn.
  */
+
 class TopNExecutor : public AbstractExecutor {
  public:
   /**
@@ -63,5 +64,43 @@ class TopNExecutor : public AbstractExecutor {
   const TopNPlanNode *plan_;
   /** The child executor from which tuples are obtained */
   std::unique_ptr<AbstractExecutor> child_executor_;
+
+  struct CustomComparator {
+    TopNExecutor *my_instance_;  // Pointer to MyClass instance
+
+    // Constructor to initialize myInstance
+    explicit CustomComparator(TopNExecutor *instance) : my_instance_(instance) {}
+
+    auto operator()(const Tuple &a, const Tuple &b) const -> bool {
+      auto order_bys = my_instance_->plan_->GetOrderBy();
+      for (auto &p : order_bys) {
+        OrderByType type = p.first;
+        AbstractExpressionRef expr = p.second;
+        Value value_a = expr->Evaluate(&a, my_instance_->plan_->OutputSchema());
+        Value value_b = expr->Evaluate(&b, my_instance_->plan_->OutputSchema());
+
+        if (type == OrderByType::DEFAULT || type == OrderByType::ASC) {
+          if (value_a.CompareLessThan(value_b) == CmpBool::CmpTrue) {
+            return true;
+          }
+          if (value_a.CompareGreaterThan(value_b) == CmpBool::CmpTrue) {
+            return false;
+          }
+        } else {
+          if (value_a.CompareLessThan(value_b) == CmpBool::CmpTrue) {
+            return false;
+          }
+          if (value_a.CompareGreaterThan(value_b) == CmpBool::CmpTrue) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+  };
+  std::priority_queue<Tuple, std::vector<Tuple>, CustomComparator> pq_;
+  std::vector<Tuple> output_;
+  bool initialized_{false};
+  int iterator_;
 };
 }  // namespace bustub

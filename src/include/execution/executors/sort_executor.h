@@ -57,6 +57,9 @@ class SortExecutor : public AbstractExecutor {
   const SortPlanNode *plan_;
   std::unique_ptr<AbstractExecutor> child_executor_;
   const std::vector<std::pair<OrderByType, AbstractExpressionRef>> &order_bys_;
+  std::vector<Tuple> tuples_;
+  bool initialized_{false};
+  uint32_t iterator_{0};
 
   auto CustomComparator(const Tuple &a, const Tuple &b) -> bool {
     for (auto &p : order_bys_) {
@@ -81,7 +84,10 @@ class SortExecutor : public AbstractExecutor {
         }
       }
     }
-    return true;
+    return false;
+  }
+  void SortTuples(std::vector<Tuple> &tuples) {
+    std::sort(tuples.begin(), tuples.end(), [this](const Tuple &a, const Tuple &b) { return CustomComparator(a, b); });
   }
 };
 }  // namespace bustub
