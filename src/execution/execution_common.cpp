@@ -12,7 +12,49 @@ namespace bustub {
 
 auto ReconstructTuple(const Schema *schema, const Tuple &base_tuple, const TupleMeta &base_meta,
                       const std::vector<UndoLog> &undo_logs) -> std::optional<Tuple> {
-  UNIMPLEMENTED("not implemented");
+  bool is_deleted = base_meta.is_deleted_;
+
+  int column_count = schema->GetColumnCount();
+  Tuple output_tuple = base_tuple;
+
+  for (const UndoLog &undo_log : undo_logs) {
+    is_deleted = undo_log.is_deleted_;
+
+    std::vector<bool> modified_fields = undo_log.modified_fields_;
+    Tuple log_tuple = undo_log.tuple_;
+
+    // Generate the partial schema that allows us to extract the log's tuple values
+    std::vector<Column> partial_columns;
+    for (int col_id = 0; col_id < column_count; col_id++) {
+      if (!modified_fields[col_id]) {
+        continue;
+      }
+      Column column = schema->GetColumn(col_id);
+      partial_columns.emplace_back(column);
+    }
+    Schema partial_schema{partial_columns};
+
+    // Extract the tuple values and rewrite our base tuple
+    std::vector<Value> new_values;
+    // Iterator that allows us to extract the value from the undo log tuple
+    int partial_tuple_iterator = 0;
+    for (int col_id = 0; col_id < column_count; col_id++) {
+      if (!modified_fields[col_id]) {
+        Value value = output_tuple.GetValue(schema, col_id);
+        new_values.emplace_back(value);
+      } else {
+        Value value = log_tuple.GetValue(&partial_schema, partial_tuple_iterator);
+        new_values.emplace_back(value);
+        partial_tuple_iterator++;
+      }
+    }
+    Tuple new_tuple(new_values, schema);
+    output_tuple = std::move(new_tuple);
+  }
+  if (is_deleted) {
+    return std::nullopt;
+  }
+  return output_tuple;
 }
 
 void TxnMgrDbg(const std::string &info, TransactionManager *txn_mgr, const TableInfo *table_info,

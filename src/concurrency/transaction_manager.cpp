@@ -44,6 +44,9 @@ auto TransactionManager::Begin(IsolationLevel isolation_level) -> Transaction * 
 
   // TODO(fall2023): set the timestamps here. Watermark updated below.
 
+  // set read timestamp to the latest committed timestamp
+  txn_ref->read_ts_.store(last_commit_ts_.load());
+
   running_txns_.AddTxn(txn_ref->read_ts_);
   return txn_ref;
 }
@@ -54,6 +57,7 @@ auto TransactionManager::Commit(Transaction *txn) -> bool {
   std::unique_lock<std::mutex> commit_lck(commit_mutex_);
 
   // TODO(fall2023): acquire commit ts!
+  timestamp_t commit_ts = last_commit_ts_;
 
   if (txn->state_ != TransactionState::RUNNING) {
     throw Exception("txn not in running state");
@@ -72,6 +76,8 @@ auto TransactionManager::Commit(Transaction *txn) -> bool {
   std::unique_lock<std::shared_mutex> lck(txn_map_mutex_);
 
   // TODO(fall2023): set commit timestamp + update last committed timestamp here.
+  txn->commit_ts_ = ++commit_ts;
+  last_commit_ts_ = commit_ts;
 
   txn->state_ = TransactionState::COMMITTED;
   running_txns_.UpdateCommitTs(txn->commit_ts_);
