@@ -85,7 +85,7 @@ auto Trie::Put(std::string_view key, T value) const -> Trie {
 
     std::unique_ptr<TrieNode> cloned_cur_node = cur_node->Clone();
     cloned_cur_node->children_[cur_char] = child;
-    return std::move(cloned_cur_node);
+    return cloned_cur_node;
   };
   std::shared_ptr<const TrieNode> new_root = helper(string_key, this->root_);
   return Trie(new_root);

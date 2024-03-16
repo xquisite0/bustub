@@ -14,6 +14,7 @@
 
 #include "catalog/column.h"
 #include "common/config.h"
+#include "execution/executor_context.h"
 #include "execution/executors/insert_executor.h"
 
 namespace bustub {
@@ -40,7 +41,7 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   TableInfo *table_info = catalog->GetTable(table_oid);
 
   // initialise the tuple meta
-  TupleMeta tuple_meta = {0, false};
+  TupleMeta tuple_meta = {exec_ctx_->GetTransaction()->GetTransactionTempTs(), false};
 
   // obtain the list of table_indexes
   std::vector<IndexInfo *> table_indexes = catalog->GetTableIndexes(table_info->name_);
@@ -65,6 +66,11 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
             tuple_next.KeyFromTuple(table_info->schema_, index_info->key_schema_, index_info->index_->GetKeyAttrs()),
             rid_of_inserted.value(), exec_ctx_->GetTransaction());
       }
+    }
+
+    // update write set of transaction
+    if (rid_of_inserted.has_value()) {
+      exec_ctx_->GetTransaction()->AppendWriteSet(table_oid, rid_of_inserted.value());
     }
   }
 
