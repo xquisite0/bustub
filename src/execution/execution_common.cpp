@@ -57,15 +57,34 @@ auto ReconstructTuple(const Schema *schema, const Tuple &base_tuple, const Tuple
   return output_tuple;
 }
 
+void Helper(TransactionManager *txn_mgr, RID cur_rid, const TableInfo *table_info) {
+  // UndoLink undo_link;
+  std::optional<UndoLink> undo_link_opt = txn_mgr->GetUndoLink(cur_rid);
+
+  if (!undo_link_opt.has_value() || !undo_link_opt->IsValid()) {
+    return;
+  }
+  UndoLink undo_link = *undo_link_opt;
+  while (undo_link.IsValid()) {
+    std::cout << "\t";
+    std::cout << "txn" << undo_link.prev_txn_ - TXN_START_ID << "@" << undo_link.prev_log_idx_ << " ";
+    UndoLog undo_log = txn_mgr->GetUndoLog(undo_link);
+    std::cout << undo_log.tuple_.ToString(&table_info->schema_) << " ";
+    std::cout << "ts=" << undo_log.ts_ << "\n";
+    undo_link = undo_log.prev_version_;
+  }
+}
+
 void TxnMgrDbg(const std::string &info, TransactionManager *txn_mgr, const TableInfo *table_info,
                TableHeap *table_heap) {
   // always use stderr for printing logs...
-  fmt::println(stderr, "debug_hook: {}", info);
+  // fmt::println(stderr, "debug_hook: {}", info);
 
-  fmt::println(
-      stderr,
-      "You see this line of text because you have not implemented `TxnMgrDbg`. You should do this once you have "
-      "finished task 2. Implementing this helper function will save you a lot of time for debugging in later tasks.");
+  // fmt::println(
+  //     stderr,
+  //     "You see this line of text because you have not implemented `TxnMgrDbg`. You should do this once you have "
+  //     "finished task 2. Implementing this helper function will save you a lot of time for debugging in later
+  //     tasks.");
 
   // We recommend implementing this function as traversing the table heap and print the version chain. An example output
   // of our reference solution:
@@ -81,6 +100,27 @@ void TxnMgrDbg(const std::string &info, TransactionManager *txn_mgr, const Table
   // RID=0/3 ts=txn6 <del marker> tuple=(<NULL>, <NULL>, <NULL>)
   //   txn6@0 (6, <NULL>, <NULL>) ts=2
   //   txn3@1 (7, _, _) ts=1
+
+  TableIterator iterator = table_heap->MakeIterator();
+  while (!iterator.IsEnd()) {
+    RID cur_rid = iterator.GetRID();
+    auto [tuple_meta, tuple] = table_heap->GetTuple(cur_rid);
+
+    std::cout << "RID=" << cur_rid.GetPageId() << "/" << cur_rid.GetSlotNum() << " ";
+    std::cout << "ts=";
+    if (tuple_meta.ts_ >= TXN_START_ID) {
+      std::cout << "txn" << tuple_meta.ts_ - TXN_START_ID << " ";
+    } else {
+      std::cout << tuple_meta.ts_ << " ";
+    }
+    if (tuple_meta.is_deleted_) {
+      std::cout << "deleted ";
+    }
+    std::cout << "tuple=" << tuple.ToString(&table_info->schema_) << "\n";
+
+    Helper(txn_mgr, cur_rid, table_info);
+    ++iterator;
+  }
 }
 
 }  // namespace bustub

@@ -63,5 +63,7 @@ class DeleteExecutor : public AbstractExecutor {
   std::unique_ptr<AbstractExecutor> child_executor_;
 
   bool deleted_{false};
+
+  std::vector<std::pair<Tuple, RID>> child_tuples_;
 };
 }  // namespace bustub
