@@ -33,10 +33,19 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   table_oid_t table_oid = plan_->GetTableOid();
   Catalog *catalog = exec_ctx_->GetCatalog();
   TableInfo *table_info = catalog->GetTable(table_oid);
+  
+  // get the transaction id & read timestamp of cur txn
+  Transaction *transaction = exec_ctx_->GetTransaction();
+  timestamp_t txn_id = -1;
+  timestamp_t read_ts;
+  if (transaction != nullptr) {
+    txn_id = transaction->GetTransactionTempTs();
+    read_ts = transaction->GetReadTs();
+  }
 
   // initialise the tuple meta
-  TupleMeta old_tuple_meta = {0, true};
-  TupleMeta new_tuple_meta = {0, false};
+  //TupleMeta old_tuple_meta = {txn_id, true};
+  TupleMeta tuple_meta = {txn_id, false};
 
   // obtain the list of table_indexes
   std::vector<IndexInfo *> table_indexes = catalog->GetTableIndexes(table_info->name_);
@@ -48,9 +57,108 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   int tuples_updated = 0;
   Tuple tuple_next = Tuple{RID{INVALID_PAGE_ID, 0}};
   RID rid_next = RID{INVALID_PAGE_ID, 0};
-  // std::cout << rid_next << "\n";
 
   while (child_executor_->Next(&tuple_next, &rid_next)) {
+    std::pair<Tuple, RID> p = {tuple_next, rid_next};
+    child_tuples_.emplace_back(p);
+  }
+  // std::cout << rid_next << "\n";
+
+   for (auto &p : child_tuples_) {
+    auto [tuple_next, rid_next] = p;
+
+    TupleMeta cur_tuple_meta = table_info->table_->GetTupleMeta(rid_next);
+    timestamp_t ts = cur_tuple_meta.ts_;
+
+    // process w-w conflicts!
+    // Case 1 of w-w conflict: tuple has been modified by another uncommitted transaction
+    if (ts >= TXN_START_ID && ts != txn_id) {
+      std::cout << "Exception thrown.\n";
+      transaction->SetTainted();
+      throw ExecutionException("w-w conflict: tuple has been modified by another uncommitted transaction");
+    }
+
+    // Case 2 of w-w conflict: tuple has been modified by a committed transaction in the "future" (timestamp > our
+    // current readable timestamp)
+    if (ts < TXN_START_ID && ts > read_ts) {
+      transaction->SetTainted();
+      throw ExecutionException(
+          "w-w conflict: tuple has been modified by a committed transaction in the 'future' "
+          "(timestamp > our current readable timestamp)");
+    }
+
+    // initialise the new tuple
+    std::vector<Value> new_values;
+    new_values.reserve(target_expressions.size());
+    for (AbstractExpressionRef &target_expression : target_expressions) {
+      new_values.push_back(target_expression->Evaluate(&tuple_next, child_executor_->GetOutputSchema()));
+    }
+    Tuple new_tuple = Tuple(new_values, &child_executor_->GetOutputSchema());
+
+    // this txn has modified the tuple before
+    if (ts == txn_id) {
+      // but, what if thereis no undolog??
+      // modify the undolog
+      // look at unmodified fields only
+      
+        // if the cur tuple & new tuple differ on them, add that diff to undolog
+
+      // update tuple
+      table_info->table_->UpdateTupleInPlace(new_tuple_meta, new_tuple, rid_next);
+      tuples_updated++;
+      transaction->AppendWriteSet(table_oid, rid_next);
+      continue;
+    }
+
+    // grab the most recent undo log for the current tuple
+    bool logs_exist = true;
+    UndoLink undo_link;
+    TransactionManager *txn_mgr = exec_ctx_->GetTransactionManager();
+    if (txn_mgr != nullptr) {
+      auto undo_link_opt = txn_mgr->GetUndoLink(rid_next);
+      if (undo_link_opt.has_value()) {
+        undo_link = undo_link_opt.value();
+      } else {
+        logs_exist = false;
+      }
+    }
+    UndoLog undo_log;
+    if (logs_exist) {
+      undo_log = txn_mgr->GetUndoLog(undo_link);
+    }
+
+    // create the new undolog
+    UndoLog new_undo_log;
+    new_undo_log.is_deleted_ = cur_tuple_meta.is_deleted_;
+    for (uint32_t i = 0; i < child_executor_->GetOutputSchema().GetColumnCount(); i++) {
+      new_undo_log.modified_fields_.emplace_back(false);
+    }
+    new_undo_log.tuple_ = tuple_next;
+    new_undo_log.ts_ = ts;
+    new_undo_log.prev_version_ = undo_link;
+
+    // just modify the existing undolog
+    if (undo_log.ts_ == txn_id) {
+      transaction->ModifyUndoLog(undo_link.prev_log_idx_, new_undo_log);
+    } else {
+      UndoLink new_undo_link = transaction->AppendUndoLog(new_undo_log);
+      txn_mgr->UpdateUndoLink(rid_next, new_undo_link);
+
+      // delete tuple
+      table_info->table_->UpdateTupleMeta(tuple_meta, rid_next);
+
+      tuples_deleted++;
+    }
+
+    // update indices
+    for (IndexInfo *index_info : table_indexes) {
+      Tuple old_key =
+          tuple_next.KeyFromTuple(table_info->schema_, index_info->key_schema_, index_info->index_->GetKeyAttrs());
+      index_info->index_->DeleteEntry(old_key, rid_next, exec_ctx_->GetTransaction());
+    }
+    transaction->AppendWriteSet(table_oid, rid_next);
+
+    // ENDCOPY -----------
     // delete old tuple
     table_info->table_->UpdateTupleMeta(old_tuple_meta, rid_next);
 
