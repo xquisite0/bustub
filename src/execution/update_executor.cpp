@@ -12,6 +12,9 @@
 #include <memory>
 
 #include "binder/keyword_helper.h"
+#include "common/config.h"
+#include "common/exception.h"
+#include "concurrency/transaction_manager.h"
 #include "execution/executors/update_executor.h"
 
 namespace bustub {
@@ -33,18 +36,18 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   table_oid_t table_oid = plan_->GetTableOid();
   Catalog *catalog = exec_ctx_->GetCatalog();
   TableInfo *table_info = catalog->GetTable(table_oid);
-  
+
   // get the transaction id & read timestamp of cur txn
   Transaction *transaction = exec_ctx_->GetTransaction();
   timestamp_t txn_id = -1;
-  timestamp_t read_ts;
+  timestamp_t read_ts = -1;
   if (transaction != nullptr) {
     txn_id = transaction->GetTransactionTempTs();
     read_ts = transaction->GetReadTs();
   }
 
   // initialise the tuple meta
-  //TupleMeta old_tuple_meta = {txn_id, true};
+  // TupleMeta old_tuple_meta = {txn_id, true};
   TupleMeta tuple_meta = {txn_id, false};
 
   // obtain the list of table_indexes
@@ -64,7 +67,7 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   }
   // std::cout << rid_next << "\n";
 
-   for (auto &p : child_tuples_) {
+  for (auto &p : child_tuples_) {
     auto [tuple_next, rid_next] = p;
 
     TupleMeta cur_tuple_meta = table_info->table_->GetTupleMeta(rid_next);
@@ -95,21 +98,6 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
     }
     Tuple new_tuple = Tuple(new_values, &child_executor_->GetOutputSchema());
 
-    // this txn has modified the tuple before
-    if (ts == txn_id) {
-      // but, what if thereis no undolog??
-      // modify the undolog
-      // look at unmodified fields only
-      
-        // if the cur tuple & new tuple differ on them, add that diff to undolog
-
-      // update tuple
-      table_info->table_->UpdateTupleInPlace(new_tuple_meta, new_tuple, rid_next);
-      tuples_updated++;
-      transaction->AppendWriteSet(table_oid, rid_next);
-      continue;
-    }
-
     // grab the most recent undo log for the current tuple
     bool logs_exist = true;
     UndoLink undo_link;
@@ -123,61 +111,95 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
       }
     }
     UndoLog undo_log;
-    if (logs_exist) {
+    if (logs_exist && txn_mgr != nullptr) {
       undo_log = txn_mgr->GetUndoLog(undo_link);
     }
 
-    // create the new undolog
-    UndoLog new_undo_log;
-    new_undo_log.is_deleted_ = cur_tuple_meta.is_deleted_;
-    for (uint32_t i = 0; i < child_executor_->GetOutputSchema().GetColumnCount(); i++) {
-      new_undo_log.modified_fields_.emplace_back(false);
+    // newly inserted by this transaction
+    if (ts == txn_id && !logs_exist) {
+      // update tuple
+      table_info->table_->UpdateTupleInPlace(tuple_meta, new_tuple, rid_next);
+      tuples_updated++;
+      transaction->AppendWriteSet(table_oid, rid_next);
+      continue;
     }
-    new_undo_log.tuple_ = tuple_next;
-    new_undo_log.ts_ = ts;
-    new_undo_log.prev_version_ = undo_link;
+
+    // generate schema for the previous log
+    // so that we can access the previous tuple state
+    std::vector<Column> prev_log_columns;
+    int col_id = 0;
+    for (bool field : undo_log.modified_fields_) {
+      if (field) {
+        prev_log_columns.emplace_back(child_executor_->GetOutputSchema().GetColumn(col_id));
+      }
+      col_id++;
+    }
+    Schema prev_log_schema(prev_log_columns);
+
+    UndoLog new_undo_log;
+    if (ts == txn_id) {
+      // tuple was updated by this transaction before
+      new_undo_log.is_deleted_ = cur_tuple_meta.is_deleted_;
+
+      int i = 0;
+      std::vector<Value> diff_values;
+      std::vector<Column> diff_columns;
+
+      int log_tuple_iterator = 0;
+      for (bool field : undo_log.modified_fields_) {
+        if (!field) {
+          Value cur_val = tuple_next.GetValue(&child_executor_->GetOutputSchema(), i);
+          Value next_val = new_tuple.GetValue(&child_executor_->GetOutputSchema(), i);
+          if (!cur_val.CompareExactlyEquals(next_val)) {
+            diff_values.emplace_back(cur_val);
+            diff_columns.emplace_back(child_executor_->GetOutputSchema().GetColumn(i));
+          }
+          new_undo_log.modified_fields_.emplace_back(!cur_val.CompareExactlyEquals(next_val));
+        } else {
+          diff_values.emplace_back(undo_log.tuple_.GetValue(&prev_log_schema, log_tuple_iterator));
+          diff_columns.emplace_back(child_executor_->GetOutputSchema().GetColumn(i));
+          new_undo_log.modified_fields_.emplace_back(true);
+          log_tuple_iterator++;
+        }
+        i++;
+      }
+      Schema diff_schema = Schema(diff_columns);
+      new_undo_log.tuple_ = Tuple(diff_values, &diff_schema);
+      new_undo_log.ts_ = undo_log.ts_;
+      new_undo_log.prev_version_ = undo_log.prev_version_;
+
+    } else {
+      std::vector<Value> diff_values;
+      std::vector<Column> diff_columns;
+      for (uint32_t i = 0; i < child_executor_->GetOutputSchema().GetColumnCount(); i++) {
+        Value cur_val = tuple_next.GetValue(&child_executor_->GetOutputSchema(), i);
+        Value next_val = new_tuple.GetValue(&child_executor_->GetOutputSchema(), i);
+        if (!cur_val.CompareExactlyEquals(next_val)) {
+          diff_values.emplace_back(cur_val);
+          diff_columns.emplace_back(child_executor_->GetOutputSchema().GetColumn(i));
+        }
+        new_undo_log.modified_fields_.emplace_back(!cur_val.CompareExactlyEquals(next_val));
+      }
+      Schema diff_schema = Schema(diff_columns);
+      new_undo_log.tuple_ = Tuple(diff_values, &diff_schema);
+      new_undo_log.ts_ = ts;
+      new_undo_log.prev_version_ = undo_link;
+    }
 
     // just modify the existing undolog
-    if (undo_log.ts_ == txn_id) {
+    if (ts == txn_id) {
+      // std::cout << "Updated transaction " << txn_id - TXN_START_ID << " at Log ID: " << undo_link.prev_log_idx_ <<
+      // "\n"; std::cout << "The undo log's modified fields size is: " << new_undo_log.modified_fields_.size() << "\n";
       transaction->ModifyUndoLog(undo_link.prev_log_idx_, new_undo_log);
+      table_info->table_->UpdateTupleInPlace(tuple_meta, new_tuple, rid_next);
     } else {
       UndoLink new_undo_link = transaction->AppendUndoLog(new_undo_log);
       txn_mgr->UpdateUndoLink(rid_next, new_undo_link);
 
-      // delete tuple
-      table_info->table_->UpdateTupleMeta(tuple_meta, rid_next);
-
-      tuples_deleted++;
+      // update tuple & meta
+      table_info->table_->UpdateTupleInPlace(tuple_meta, new_tuple, rid_next);
     }
-
-    // update indices
-    for (IndexInfo *index_info : table_indexes) {
-      Tuple old_key =
-          tuple_next.KeyFromTuple(table_info->schema_, index_info->key_schema_, index_info->index_->GetKeyAttrs());
-      index_info->index_->DeleteEntry(old_key, rid_next, exec_ctx_->GetTransaction());
-    }
-    transaction->AppendWriteSet(table_oid, rid_next);
-
-    // ENDCOPY -----------
-    // delete old tuple
-    table_info->table_->UpdateTupleMeta(old_tuple_meta, rid_next);
-
-    // update tuple columns
-    std::vector<Value> new_values;
-    new_values.reserve(target_expressions.size());
-    for (AbstractExpressionRef &target_expression : target_expressions) {
-      // std::cout << &GetOutputSchema() << "\n";
-      new_values.push_back(target_expression->Evaluate(&tuple_next, child_executor_->GetOutputSchema()));
-    }
-    // std::cout << tuple_next.ToString(&child_executor_->GetOutputSchema()) << "\n";
-
-    // insert tuple into table
-    Tuple new_tuple = Tuple(new_values, &child_executor_->GetOutputSchema());
-
-    std::optional<RID> rid_of_inserted = table_info->table_->InsertTuple(
-        new_tuple_meta, new_tuple, exec_ctx_->GetLockManager(), exec_ctx_->GetTransaction(), table_oid);
     tuples_updated++;
-
     // update indices
     for (IndexInfo *index_info : table_indexes) {
       Tuple old_key =
@@ -185,10 +207,28 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
       Tuple new_key =
           new_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_, index_info->index_->GetKeyAttrs());
       index_info->index_->DeleteEntry(old_key, rid_next, exec_ctx_->GetTransaction());
-      if (rid_of_inserted.has_value()) {
-        index_info->index_->InsertEntry(new_key, rid_of_inserted.value(), exec_ctx_->GetTransaction());
-      }
+      index_info->index_->InsertEntry(new_key, rid_next, exec_ctx_->GetTransaction());
     }
+    transaction->AppendWriteSet(table_oid, rid_next);
+
+    // ENDCOPY -----------
+    // delete old tuple
+    // table_info->table_->UpdateTupleMeta(old_tuple_meta, rid_next);
+
+    // update tuple columns
+    // std::vector<Value> new_values;
+    // new_values.reserve(target_expressions.size());
+    // for (AbstractExpressionRef &target_expression : target_expressions) {
+    //   // std::cout << &GetOutputSchema() << "\n";
+    //   new_values.push_back(target_expression->Evaluate(&tuple_next, child_executor_->GetOutputSchema()));
+    // }
+    // std::cout << tuple_next.ToString(&child_executor_->GetOutputSchema()) << "\n";
+
+    // insert tuple into table
+    // Tuple new_tuple = Tuple(new_values, &child_executor_->GetOutputSchema());
+
+    // std::optional<RID> rid_of_inserted = table_info->table_->InsertTuple(
+    // new_tuple_meta, new_tuple, exec_ctx_->GetLockManager(), exec_ctx_->GetTransaction(), table_oid);
   }
 
   std::vector<Value> values = {Value(TypeId::INTEGER, tuples_updated)};

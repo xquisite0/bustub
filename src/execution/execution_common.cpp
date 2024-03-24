@@ -57,19 +57,59 @@ auto ReconstructTuple(const Schema *schema, const Tuple &base_tuple, const Tuple
   return output_tuple;
 }
 
-void Helper(TransactionManager *txn_mgr, RID cur_rid, const TableInfo *table_info) {
+void Helper(TransactionManager *txn_mgr, RID cur_rid, const TableInfo *table_info, Tuple *base_tuple) {
   // UndoLink undo_link;
   std::optional<UndoLink> undo_link_opt = txn_mgr->GetUndoLink(cur_rid);
 
   if (!undo_link_opt.has_value() || !undo_link_opt->IsValid()) {
     return;
   }
+  Schema schema = table_info->schema_;
+
+  int column_count = schema.GetColumnCount();
+  Tuple output_tuple = *base_tuple;
+
   UndoLink undo_link = *undo_link_opt;
   while (undo_link.IsValid()) {
+    // is_deleted = undo_log.is_deleted_;
     std::cout << "\t";
     std::cout << "txn" << undo_link.prev_txn_ - TXN_START_ID << "@" << undo_link.prev_log_idx_ << " ";
+    // std::cout << "prev_txn_: " << undo_link.prev_txn_ - TXN_START_ID << " "
+    // << "prev_log_idx_: " << undo_link.prev_log_idx_ << "\n";
     UndoLog undo_log = txn_mgr->GetUndoLog(undo_link);
-    std::cout << undo_log.tuple_.ToString(&table_info->schema_) << " ";
+    // std::cout << "ts_: " << undo_log.ts_ << "\n";
+    // std::cout << "Size of modified_fields_: " << undo_log.modified_fields_.size() << "\n";
+
+    // Generate the cur tuple
+    // Generate the partial schema that allows us to extract the log's tuple values
+    std::vector<Column> partial_columns;
+    for (int col_id = 0; col_id < column_count; col_id++) {
+      if (!undo_log.modified_fields_[col_id]) {
+        continue;
+      }
+      Column column = schema.GetColumn(col_id);
+      partial_columns.emplace_back(column);
+    }
+    Schema partial_schema{partial_columns};
+    // Extract the tuple values and rewrite our base tuple
+    std::vector<Value> new_values;
+    Tuple log_tuple = undo_log.tuple_;
+    // Iterator that allows us to extract the value from the undo log tuple
+    int partial_tuple_iterator = 0;
+    for (int col_id = 0; col_id < column_count; col_id++) {
+      if (!undo_log.modified_fields_[col_id]) {
+        Value value = output_tuple.GetValue(&schema, col_id);
+        new_values.emplace_back(value);
+      } else {
+        Value value = log_tuple.GetValue(&partial_schema, partial_tuple_iterator);
+        new_values.emplace_back(value);
+        partial_tuple_iterator++;
+      }
+    }
+    Tuple new_tuple(new_values, &schema);
+    output_tuple = std::move(new_tuple);
+
+    std::cout << output_tuple.ToString(&table_info->schema_) << " ";
     std::cout << "ts=" << undo_log.ts_ << "\n";
     undo_link = undo_log.prev_version_;
   }
@@ -118,7 +158,7 @@ void TxnMgrDbg(const std::string &info, TransactionManager *txn_mgr, const Table
     }
     std::cout << "tuple=" << tuple.ToString(&table_info->schema_) << "\n";
 
-    Helper(txn_mgr, cur_rid, table_info);
+    Helper(txn_mgr, cur_rid, table_info, &tuple);
     ++iterator;
   }
 }

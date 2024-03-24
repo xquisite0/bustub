@@ -36,7 +36,7 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   TableInfo *table_info = catalog->GetTable(table_oid);
   Transaction *transaction = exec_ctx_->GetTransaction();
   timestamp_t txn_id = -1;
-  timestamp_t read_ts;
+  timestamp_t read_ts = -1;
   if (transaction != nullptr) {
     txn_id = transaction->GetTransactionTempTs();
     read_ts = transaction->GetReadTs();
@@ -103,7 +103,7 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
       }
     }
     UndoLog undo_log;
-    if (logs_exist) {
+    if (logs_exist && txn_mgr != nullptr) {
       undo_log = txn_mgr->GetUndoLog(undo_link);
     }
 
@@ -111,7 +111,8 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
     UndoLog new_undo_log;
     new_undo_log.is_deleted_ = cur_tuple_meta.is_deleted_;
     for (uint32_t i = 0; i < child_executor_->GetOutputSchema().GetColumnCount(); i++) {
-      new_undo_log.modified_fields_.emplace_back(false);
+      // this is supposed to append all trues.
+      new_undo_log.modified_fields_.emplace_back(true);
     }
     new_undo_log.tuple_ = tuple_next;
     new_undo_log.ts_ = ts;
