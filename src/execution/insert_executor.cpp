@@ -14,6 +14,7 @@
 
 #include "catalog/column.h"
 #include "common/config.h"
+#include "common/exception.h"
 #include "execution/executor_context.h"
 #include "execution/executors/insert_executor.h"
 
@@ -54,17 +55,31 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   // std::cout << rid_next << "\n";
 
   while (child_executor_->Next(&tuple_next, &rid_next)) {
-    // insert tuple into table
-    std::optional<RID> rid_of_inserted = table_info->table_->InsertTuple(
-        tuple_meta, tuple_next, exec_ctx_->GetLockManager(), exec_ctx_->GetTransaction(), table_oid);
-    tuples_added++;
-
+    std::optional<RID> rid_of_inserted;
     // update indices
     for (IndexInfo *index_info : table_indexes) {
-      if (rid_of_inserted.has_value()) {
-        index_info->index_->InsertEntry(
-            tuple_next.KeyFromTuple(table_info->schema_, index_info->key_schema_, index_info->index_->GetKeyAttrs()),
-            rid_of_inserted.value(), exec_ctx_->GetTransaction());
+      // construct key
+      Tuple key =
+          tuple_next.KeyFromTuple(table_info->schema_, index_info->key_schema_, index_info->index_->GetKeyAttrs());
+
+      // check if key exists in index already
+      std::vector<RID> result;
+      index_info->index_->ScanKey(key, &result, exec_ctx_->GetTransaction());
+      if (!result.empty()) {
+        exec_ctx_->GetTransaction()->SetTainted();
+        throw ExecutionException("write-write conflict in primary key");
+        continue;
+      }
+
+      // insert tuple into table
+      rid_of_inserted = table_info->table_->InsertTuple(tuple_meta, tuple_next, exec_ctx_->GetLockManager(),
+                                                        exec_ctx_->GetTransaction(), table_oid);
+      tuples_added++;
+
+      if (rid_of_inserted.has_value() &&
+          !index_info->index_->InsertEntry(key, rid_of_inserted.value(), exec_ctx_->GetTransaction())) {
+        throw ExecutionException("write-write conflict in primary key");
+        exec_ctx_->GetTransaction()->SetTainted();
       }
     }
 
