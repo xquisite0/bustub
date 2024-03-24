@@ -40,6 +40,8 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   if (transaction != nullptr) {
     txn_id = transaction->GetTransactionTempTs();
     read_ts = transaction->GetReadTs();
+  } else {
+    return false;
   }
   // initialise the tuple meta
   TupleMeta tuple_meta = {txn_id, true};
@@ -69,7 +71,7 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
     // process w-w conflicts!
     // Case 1 of w-w conflict: tuple has been modified by another uncommitted transaction
     if (ts >= TXN_START_ID && ts != txn_id) {
-      std::cout << "Exception thrown.\n";
+      // std::cout << "Exception thrown.\n";
       transaction->SetTainted();
       throw ExecutionException("w-w conflict: tuple has been modified by another uncommitted transaction");
     }

@@ -68,7 +68,7 @@ class UpdateExecutor : public AbstractExecutor {
   std::unique_ptr<AbstractExecutor> child_executor_;
 
   bool updated_{false};
-  
+
   std::vector<std::pair<Tuple, RID>> child_tuples_;
 };
 }  // namespace bustub

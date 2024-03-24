@@ -44,6 +44,8 @@ auto UpdateExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
   if (transaction != nullptr) {
     txn_id = transaction->GetTransactionTempTs();
     read_ts = transaction->GetReadTs();
+  } else {
+    return false;
   }
 
   // initialise the tuple meta

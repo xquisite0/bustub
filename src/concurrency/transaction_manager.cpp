@@ -111,6 +111,52 @@ void TransactionManager::Abort(Transaction *txn) {
   running_txns_.RemoveTxn(txn->read_ts_);
 }
 
-void TransactionManager::GarbageCollection() { UNIMPLEMENTED("not implemented"); }
+void TransactionManager::GarbageCollection() {
+  // iterate through the tables
+  timestamp_t watermark = GetWatermark();
+  std::unordered_map<txn_id_t, bool> txns_visited;
+
+  std::vector<std::string> table_names = catalog_->GetTableNames();
+  for (std::string &table_name : table_names) {
+    TableInfo *table_info = catalog_->GetTable(table_name);
+    TableIterator table_iterator = table_info->table_->MakeIterator();
+
+    // iterate through the current table
+    while (!table_iterator.IsEnd()) {
+      RID rid = table_iterator.GetRID();
+      TupleMeta tuple_meta = table_info->table_->GetTupleMeta(rid);
+
+      std::optional<UndoLink> undo_link_opt = GetUndoLink(rid);
+      UndoLink undo_link;
+      if (undo_link_opt.has_value()) {
+        undo_link = undo_link_opt.value();
+      }
+
+      // if not committed or can't be seen by lowest read_ts transaction, we have to traverse
+      if (tuple_meta.ts_ >= TXN_START_ID || watermark < tuple_meta.ts_) {
+        while (undo_link.IsValid()) {
+          UndoLog cur_undo_log = GetUndoLog(undo_link);
+          txns_visited[undo_link.prev_txn_] = true;
+          if (watermark >= cur_undo_log.ts_) {
+            break;
+          }
+
+          undo_link = cur_undo_log.prev_version_;
+        }
+      }
+
+      ++table_iterator;
+    }
+  }
+  for (auto it = txn_map_.begin(); it != txn_map_.end();) {
+    // transaction no longer accessible + commited/aborted
+    auto [txn_id, txn] = *it;
+    if (!txns_visited[txn_id] && txn->commit_ts_ != INVALID_TS) {
+      it = txn_map_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
 
 }  // namespace bustub

@@ -68,15 +68,20 @@ void Helper(TransactionManager *txn_mgr, RID cur_rid, const TableInfo *table_inf
 
   int column_count = schema.GetColumnCount();
   Tuple output_tuple = *base_tuple;
-
   UndoLink undo_link = *undo_link_opt;
+
+  timestamp_t ts = table_info->table_->GetTupleMeta(cur_rid).ts_;
+  if (ts < TXN_START_ID && txn_mgr->GetWatermark() >= ts) {
+    return;
+  }
   while (undo_link.IsValid()) {
+    UndoLog undo_log = txn_mgr->GetUndoLog(undo_link);
     // is_deleted = undo_log.is_deleted_;
     std::cout << "\t";
     std::cout << "txn" << undo_link.prev_txn_ - TXN_START_ID << "@" << undo_link.prev_log_idx_ << " ";
     // std::cout << "prev_txn_: " << undo_link.prev_txn_ - TXN_START_ID << " "
     // << "prev_log_idx_: " << undo_link.prev_log_idx_ << "\n";
-    UndoLog undo_log = txn_mgr->GetUndoLog(undo_link);
+
     // std::cout << "ts_: " << undo_log.ts_ << "\n";
     // std::cout << "Size of modified_fields_: " << undo_log.modified_fields_.size() << "\n";
 
@@ -111,6 +116,9 @@ void Helper(TransactionManager *txn_mgr, RID cur_rid, const TableInfo *table_inf
 
     std::cout << output_tuple.ToString(&table_info->schema_) << " ";
     std::cout << "ts=" << undo_log.ts_ << "\n";
+    if (txn_mgr->GetWatermark() >= undo_log.ts_) {
+      break;
+    }
     undo_link = undo_log.prev_version_;
   }
 }
