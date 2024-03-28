@@ -133,6 +133,8 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
       tuples_deleted++;
     }
 
+    // TODO (p4 4.2): we do not delete the entry from the index! we still have to traverse the version chain because the index points
+    // to the same RID always! 
     // update indices
     for (IndexInfo *index_info : table_indexes) {
       Tuple old_key =
