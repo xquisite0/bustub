@@ -11,10 +11,17 @@
 //===----------------------------------------------------------------------===//
 #include "execution/executors/index_scan_executor.h"
 #include "common/config.h"
+#include "concurrency/transaction_manager.h"
+#include "execution/execution_common.h"
 
 namespace bustub {
 IndexScanExecutor::IndexScanExecutor(ExecutorContext *exec_ctx, const IndexScanPlanNode *plan)
-    : AbstractExecutor(exec_ctx), plan_(plan) {}
+    : AbstractExecutor(exec_ctx), plan_(plan) {
+  if (exec_ctx != nullptr && exec_ctx->GetTransaction() != nullptr) {
+    read_ts_ = exec_ctx->GetTransaction()->GetReadTs();
+    temp_ts_ = exec_ctx->GetTransaction()->GetTransactionTempTs();
+  }
+}
 
 void IndexScanExecutor::Init() { emitted_ = false; }
 
@@ -47,16 +54,21 @@ auto IndexScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   bool tuple_found = false;
   // lookup tuples scanned in table heap
   for (RID &cur_rid : result) {
-
     // TODO (p4): iterate through the version chain to generate the tuple, refer to seq_scan_executor
     // maybe... make a helper function that is shared between the 2 scan executors?
-    
-    std::pair<TupleMeta, Tuple> tuplemeta_and_tuple = table_info->table_->GetTuple(cur_rid);
+
+    std::pair<TupleMeta, Tuple> tuple_meta_and_tuple = table_info->table_->GetTuple(cur_rid);
+
+    std::optional<Tuple> tuple_opt =
+        GetTuple(tuple_meta_and_tuple, cur_rid, read_ts_, temp_ts_, exec_ctx_, GetOutputSchema(), filter_predicate);
+    if (!tuple_opt.has_value()) {
+      continue;
+    }
+    *tuple = tuple_opt.value();
+    *rid = cur_rid;
 
     // since the project assumes unique keys, we are only looking at one tuple, immediately assign this tuple to our
     // [out] tuple
-    *tuple = tuplemeta_and_tuple.second;
-    *rid = cur_rid;
 
     std::cout << "[IndexScan] We are emitting this tuple " << (*tuple).ToString(&GetOutputSchema()) << "\n";
     tuple_found = true;

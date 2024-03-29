@@ -3,6 +3,7 @@
 #include "common/config.h"
 #include "common/macros.h"
 #include "concurrency/transaction_manager.h"
+#include "execution/executor_context.h"
 #include "fmt/core.h"
 #include "storage/table/table_heap.h"
 #include "type/value.h"
@@ -10,6 +11,88 @@
 
 namespace bustub {
 
+auto GetTuple(const std::pair<TupleMeta, Tuple> &tuple_meta_and_tuple, RID cur_rid, timestamp_t read_ts,
+              timestamp_t temp_ts, ExecutorContext *exec_ctx, const Schema &schema,
+              const AbstractExpressionRef &filter_predicate) -> std::optional<Tuple> {
+  TupleMeta tuple_meta = tuple_meta_and_tuple.first;
+  Tuple cur_tuple = tuple_meta_and_tuple.second;
+  timestamp_t ts = tuple_meta.ts_;
+
+  // Case 1: tuple in heap is the most recent data, and can be accessed by current txn.
+  if (ts < TXN_START_ID && read_ts >= ts) {
+    // carry on as per usual
+    // std::cout << "Case 1 ";
+  }
+
+  // Case 2: tuple was modified earlier in our same transaction. So it is uncommitted, but we can access it.
+  if (ts == temp_ts) {
+    // carry on as per usual
+    // std::cout << "Case 2 ";
+  }
+
+  // Case 3: the tricky case. The tuple is either 1) uncommitted from another transaction or 2) is beyond our current
+  // read_ts (this tuple is a value from the future!)
+  if ((ts >= TXN_START_ID && temp_ts != ts) || (ts < TXN_START_ID && read_ts < ts)) {
+    // std::cout << "Case 3 ";
+    // iterate the version chain to obtain the undo logs
+    TransactionManager *txn_mgr = exec_ctx->GetTransactionManager();
+    if (txn_mgr == nullptr) {
+      // handle
+      return std::nullopt;
+    }
+    std::optional<UndoLink> undo_link_opt = txn_mgr->GetUndoLink(cur_rid);
+    UndoLink undo_link;
+    if (!undo_link_opt.has_value() || !undo_link_opt->IsValid()) {
+      // handle
+    } else {
+      undo_link = *undo_link_opt;
+    }
+    bool found_readable = false;
+    std::vector<UndoLog> undo_logs;
+    while (true) {
+      if (!undo_link.IsValid()) {
+        break;
+      }
+      UndoLog cur_undo_log = txn_mgr->GetUndoLog(undo_link);
+      undo_logs.emplace_back(cur_undo_log);
+      if (read_ts >= cur_undo_log.ts_) {
+        found_readable = true;
+        break;
+      }
+      undo_link = cur_undo_log.prev_version_;
+    }
+
+    if (!found_readable) {
+      tuple_meta.is_deleted_ = true;
+      return std::nullopt;
+    }
+    // reconstruct the tuple
+    std::optional<Tuple> cur_tuple_opt = ReconstructTuple(&schema, cur_tuple, tuple_meta, undo_logs);
+
+    if (cur_tuple_opt.has_value()) {
+      cur_tuple = *cur_tuple_opt;
+      tuple_meta.is_deleted_ = false;
+    } else {
+      tuple_meta.is_deleted_ = true;
+    }
+
+    // qn: how do we determine if the tuple is a deleted one... let's worry about that later, seems like we handled
+    // that case in our tuple reconstruction already
+  }
+
+  if (tuple_meta.is_deleted_) {
+    return std::nullopt;
+  }
+
+  if (filter_predicate != nullptr) {
+    // if the row fails the predicate, move on to the next tuple
+    Value fulfills_predicate = filter_predicate->Evaluate(&cur_tuple, schema);
+    if (fulfills_predicate.CompareEquals(Value(TypeId::BOOLEAN, 1)) == CmpBool::CmpFalse) {
+      return std::nullopt;
+    }
+  }
+  return cur_tuple;
+}
 auto ReconstructTuple(const Schema *schema, const Tuple &base_tuple, const TupleMeta &base_meta,
                       const std::vector<UndoLog> &undo_logs) -> std::optional<Tuple> {
   bool is_deleted = base_meta.is_deleted_;
@@ -114,7 +197,11 @@ void Helper(TransactionManager *txn_mgr, RID cur_rid, const TableInfo *table_inf
     Tuple new_tuple(new_values, &schema);
     output_tuple = std::move(new_tuple);
 
-    std::cout << output_tuple.ToString(&table_info->schema_) << " ";
+    if (undo_log.is_deleted_) {
+      std::cout << "<del> ";
+    } else {
+      std::cout << output_tuple.ToString(&table_info->schema_) << " ";
+    }
     std::cout << "ts=" << undo_log.ts_ << "\n";
     if (txn_mgr->GetWatermark() >= undo_log.ts_) {
       break;
@@ -169,6 +256,96 @@ void TxnMgrDbg(const std::string &info, TransactionManager *txn_mgr, const Table
     Helper(txn_mgr, cur_rid, table_info, &tuple);
     ++iterator;
   }
+}
+
+auto ProcessWriteWriteConflict(timestamp_t ts, timestamp_t read_ts, timestamp_t txn_id, Transaction *transaction)
+    -> void {
+  // process w-w conflicts!
+  // Case 1 of w-w conflict: tuple has been modified by another uncommitted transaction
+  if (ts >= TXN_START_ID && ts != txn_id) {
+    std::cout << "Exception thrown.\n";
+    transaction->SetTainted();
+    throw ExecutionException("w-w conflict: tuple has been modified by another uncommitted transaction");
+  }
+
+  // Case 2 of w-w conflict: tuple has been modified by a committed transaction in the "future" (timestamp > our
+  // current readable timestamp)
+  if (ts < TXN_START_ID && ts > read_ts) {
+    transaction->SetTainted();
+    throw ExecutionException(
+        "w-w conflict: tuple has been modified by a committed transaction in the 'future' "
+        "(timestamp > our current readable timestamp)");
+  }
+}
+
+auto GenerateDiffLog(timestamp_t ts, timestamp_t txn_id, TupleMeta cur_tuple_meta, const UndoLog &undo_log,
+                     const Tuple &tuple_next, const Tuple &new_tuple, const Schema &schema,
+                     const Schema &prev_log_schema, UndoLink undo_link) -> UndoLog {
+  UndoLog new_undo_log;
+  if (ts == txn_id) {
+    // tuple was updated by this transaction before
+    new_undo_log.is_deleted_ = undo_log.is_deleted_;
+    int i = 0;
+    std::vector<Value> diff_values;
+    std::vector<Column> diff_columns;
+
+    int log_tuple_iterator = 0;
+    for (bool field : undo_log.modified_fields_) {
+      if (!field) {
+        Value cur_val = tuple_next.GetValue(&schema, i);
+        Value next_val = new_tuple.GetValue(&schema, i);
+        if (!cur_val.CompareExactlyEquals(next_val)) {
+          diff_values.emplace_back(cur_val);
+          diff_columns.emplace_back(schema.GetColumn(i));
+        }
+        new_undo_log.modified_fields_.emplace_back(!cur_val.CompareExactlyEquals(next_val));
+      } else {
+        diff_values.emplace_back(undo_log.tuple_.GetValue(&prev_log_schema, log_tuple_iterator));
+        diff_columns.emplace_back(schema.GetColumn(i));
+        new_undo_log.modified_fields_.emplace_back(true);
+        log_tuple_iterator++;
+      }
+      i++;
+    }
+    Schema diff_schema = Schema(diff_columns);
+    new_undo_log.tuple_ = Tuple(diff_values, &diff_schema);
+    new_undo_log.ts_ = undo_log.ts_;
+    new_undo_log.prev_version_ = undo_log.prev_version_;
+
+  } else {
+    new_undo_log.is_deleted_ = cur_tuple_meta.is_deleted_;
+    std::vector<Value> diff_values;
+    std::vector<Column> diff_columns;
+    for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
+      Value cur_val = tuple_next.GetValue(&schema, i);
+      Value next_val = new_tuple.GetValue(&schema, i);
+      if (!cur_val.CompareExactlyEquals(next_val)) {
+        diff_values.emplace_back(cur_val);
+        diff_columns.emplace_back(schema.GetColumn(i));
+      }
+      new_undo_log.modified_fields_.emplace_back(!cur_val.CompareExactlyEquals(next_val));
+    }
+    Schema diff_schema = Schema(diff_columns);
+    new_undo_log.tuple_ = Tuple(diff_values, &diff_schema);
+    new_undo_log.ts_ = ts;
+    new_undo_log.prev_version_ = undo_link;
+  }
+  return new_undo_log;
+}
+
+auto GetUndoLogSchema(const UndoLog &undo_log, const Schema &schema) -> Schema {
+  // generate schema for the previous log
+  // so that we can access the previous tuple state
+  std::vector<Column> prev_log_columns;
+  int col_id = 0;
+  for (bool field : undo_log.modified_fields_) {
+    if (field) {
+      prev_log_columns.emplace_back(schema.GetColumn(col_id));
+    }
+    col_id++;
+  }
+  Schema prev_log_schema(prev_log_columns);
+  return prev_log_schema;
 }
 
 }  // namespace bustub

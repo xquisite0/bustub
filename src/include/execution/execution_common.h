@@ -6,15 +6,29 @@
 #include "catalog/catalog.h"
 #include "catalog/schema.h"
 #include "concurrency/transaction.h"
+#include "execution/executor_context.h"
 #include "storage/table/tuple.h"
 
 namespace bustub {
+
+auto GetTuple(const std::pair<TupleMeta, Tuple> &tuple_meta_and_tuple, RID cur_rid, timestamp_t read_ts,
+              timestamp_t temp_ts, ExecutorContext *exec_ctx, const Schema &schema,
+              const AbstractExpressionRef &filter_predicate = nullptr) -> std::optional<Tuple>;
 
 auto ReconstructTuple(const Schema *schema, const Tuple &base_tuple, const TupleMeta &base_meta,
                       const std::vector<UndoLog> &undo_logs) -> std::optional<Tuple>;
 
 void TxnMgrDbg(const std::string &info, TransactionManager *txn_mgr, const TableInfo *table_info,
                TableHeap *table_heap);
+
+auto ProcessWriteWriteConflict(timestamp_t ts, timestamp_t read_ts, timestamp_t txn_id, Transaction *transaction)
+    -> void;
+
+auto GenerateDiffLog(timestamp_t ts, timestamp_t txn_id, TupleMeta cur_tuple_meta, const UndoLog &undo_log,
+                     const Tuple &tuple_next, const Tuple &new_tuple, const Schema &schema,
+                     const Schema &prev_log_schema, UndoLink undo_link) -> UndoLog;
+
+auto GetUndoLogSchema(const UndoLog &undo_log, const Schema &schema) -> Schema;
 
 // Add new functions as needed... You are likely need to define some more functions.
 //

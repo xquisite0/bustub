@@ -70,5 +70,7 @@ class UpdateExecutor : public AbstractExecutor {
   bool updated_{false};
 
   std::vector<std::pair<Tuple, RID>> child_tuples_;
+  timestamp_t read_ts_;
+  timestamp_t txn_id_;
 };
 }  // namespace bustub
