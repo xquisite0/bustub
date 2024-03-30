@@ -45,8 +45,8 @@ auto Optimizer::OptimizeSeqScanAsIndexScan(const bustub::AbstractPlanNodeRef &pl
       // we have a predicate with just one equality test
       auto comparison_expression = dynamic_cast<ComparisonExpression *>(filter_predicate.get());
       if (comparison_expression != nullptr && comparison_expression->comp_type_ == ComparisonType::Equal) {
-        std::cout << (*filter_predicate).ToString() << " is a single column equality predicate!"
-                  << "\n";
+        // std::cout << (*filter_predicate).ToString() << " is a single column equality predicate!"
+        // << "\n";x
 
         // let's check if there exists an index for this column
         const std::string &table_name = seq_scan_plan.table_name_;

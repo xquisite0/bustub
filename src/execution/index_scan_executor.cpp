@@ -70,7 +70,7 @@ auto IndexScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     // since the project assumes unique keys, we are only looking at one tuple, immediately assign this tuple to our
     // [out] tuple
 
-    std::cout << "[IndexScan] We are emitting this tuple " << (*tuple).ToString(&GetOutputSchema()) << "\n";
+    // std::cout << "[IndexScan] We are emitting this tuple " << (*tuple).ToString(&GetOutputSchema()) << "\n";
     tuple_found = true;
   }
   emitted_ = true;

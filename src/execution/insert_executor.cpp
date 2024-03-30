@@ -93,6 +93,7 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
 
     // if this tuple points to an index that is already deleted, we effectively perform an update
     if (deleted_index) {
+      VersionUndoLink version_undo_link;
       TupleMeta cur_tuple_meta = table_info->table_->GetTupleMeta(rid_of_deleted);
       timestamp_t ts = cur_tuple_meta.ts_;
 
@@ -102,9 +103,16 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
       UndoLink undo_link;
       TransactionManager *txn_mgr = exec_ctx_->GetTransactionManager();
       if (txn_mgr != nullptr) {
-        auto undo_link_opt = txn_mgr->GetUndoLink(rid_of_deleted);
-        if (undo_link_opt.has_value()) {
-          undo_link = undo_link_opt.value();
+        auto version_undo_link_opt = txn_mgr->GetVersionLink(rid_of_deleted);
+        if (version_undo_link_opt.has_value()) {
+          version_undo_link = version_undo_link_opt.value();
+          if (version_undo_link.in_progress_) {
+            exec_ctx_->GetTransaction()->SetTainted();
+            throw ExecutionException("write-write conflict in primary key");
+          }
+          version_undo_link.in_progress_ = true;
+          txn_mgr->UpdateVersionLink(rid_of_deleted, version_undo_link);
+          undo_link = version_undo_link.prev_;
         } else {
           logs_exist = false;
         }
@@ -119,6 +127,8 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
         table_info->table_->UpdateTupleInPlace(tuple_meta, tuple_next, rid_of_deleted);
         tuples_added++;
         transaction->AppendWriteSet(table_oid, rid_of_deleted);
+        // version_undo_link.in_progress_ = false;
+        // txn_mgr->UpdateVersionLink(rid_of_deleted, version_undo_link);
         continue;
       }
 
@@ -134,13 +144,30 @@ auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
         table_info->table_->UpdateTupleInPlace(tuple_meta, tuple_next, rid_of_deleted);
       } else {
         UndoLink new_undo_link = transaction->AppendUndoLog(new_undo_log);
-        txn_mgr->UpdateUndoLink(rid_of_deleted, new_undo_link);
+        VersionUndoLink new_version_undo_link;
+        new_version_undo_link.in_progress_ = true;
+        new_version_undo_link.prev_ = new_undo_link;
+        version_undo_link = new_version_undo_link;
+        txn_mgr->UpdateVersionLink(rid_of_deleted, version_undo_link);
 
         // update tuple & meta
         table_info->table_->UpdateTupleInPlace(tuple_meta, tuple_next, rid_of_deleted);
       }
       transaction->AppendWriteSet(table_oid, rid_of_deleted);
       tuples_added++;
+
+      version_undo_link.in_progress_ = false;
+      txn_mgr->UpdateVersionLink(rid_of_deleted, version_undo_link);
+
+      // test
+      // auto sample_opt = txn_mgr->GetVersionLink(rid_of_deleted);
+      // if (sample_opt.has_value()) {
+      //   VersionUndoLink sample = sample_opt.value();
+      //   std::cout << "The below has in progress value of " << sample.in_progress_ << "\n";
+      // }
+      // std::cout << "We are done inserting rid with deleted index : " << rid_of_deleted << "\n";
+      // endtest
+
       continue;
     }
     std::optional<RID> rid_of_inserted =

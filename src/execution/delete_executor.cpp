@@ -94,11 +94,19 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
     // insert new undo log into version chain. typical linkedlist insert algorithm.
     bool logs_exist = true;
     UndoLink undo_link;
+    VersionUndoLink version_undo_link;
     TransactionManager *txn_mgr = exec_ctx_->GetTransactionManager();
     if (txn_mgr != nullptr) {
-      auto undo_link_opt = txn_mgr->GetUndoLink(rid_next);
-      if (undo_link_opt.has_value()) {
-        undo_link = undo_link_opt.value();
+      auto version_undo_link_opt = txn_mgr->GetVersionLink(rid_next);
+      if (version_undo_link_opt.has_value()) {
+        version_undo_link = version_undo_link_opt.value();
+        if (version_undo_link.in_progress_) {
+          transaction->SetTainted();
+          throw ExecutionException("write-write conflict");
+        }
+        version_undo_link.in_progress_ = true;
+        txn_mgr->UpdateVersionLink(rid_next, version_undo_link);
+        undo_link = version_undo_link.prev_;
       } else {
         logs_exist = false;
       }
@@ -127,7 +135,11 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
     // } else {
 
     UndoLink new_undo_link = transaction->AppendUndoLog(new_undo_log);
-    txn_mgr->UpdateUndoLink(rid_next, new_undo_link);
+    VersionUndoLink new_version_undo_link;
+    new_version_undo_link.in_progress_ = true;
+    new_version_undo_link.prev_ = new_undo_link;
+    version_undo_link = new_version_undo_link;
+    txn_mgr->UpdateVersionLink(rid_next, version_undo_link);
 
     // delete tuple
     table_info->table_->UpdateTupleMeta(tuple_meta, rid_next);
@@ -142,6 +154,8 @@ auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
     //   index_info->index_->DeleteEntry(old_key, rid_next, exec_ctx_->GetTransaction());
     // }
     transaction->AppendWriteSet(table_oid, rid_next);
+    version_undo_link.in_progress_ = false;
+    txn_mgr->UpdateVersionLink(rid_next, version_undo_link);
   }
 
   std::vector<Value> values = {Value(TypeId::INTEGER, tuples_deleted)};
